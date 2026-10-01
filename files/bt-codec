@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# bt-codec — switch Bluetooth audio codecs for the FiiO BTR17
+#
+# Usage:
+#   bt-codec list              Show available codecs and current state
+#   bt-codec set <codec>       Switch to a codec (lc3, ldac, aptx_hd, aptx, aac, sbc)
+#   bt-codec auto              Return to automatic (all codecs)
+#
+# LC3  = LE Audio (bap-duplex profile, best quality + microphone)
+# Others = A2DP (high-quality output, no microphone)
+set -euo pipefail
+
+ADDR="40:ED:98:1D:29:3B"
+CARD="bluez_card.40_ED_98_1D_29_3B"
+
+# A2DP codec name -> bluez5.codecs entry
+declare -A CODEC_MAP=(
+    [lc3]="lc3"
+    [ldac]="ldac"
+    [aptx_hd]="aptx_hd"
+    [aptx]="aptx"
+    [aac]="aac"
+    [sbc]="sbc"
+)
+
+find_device_node() {
+    pw-dump 2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for n in data:
+    p = n.get('info',{}).get('props',{})
+    if p.get('device.api')=='bluez5' and p.get('device.name','').startswith('bluez_card'):
+        print(n['id']); break
+" 2>/dev/null
+}
+
+current_profile() {
+    pactl list cards 2>/dev/null | grep -A200 "Name: $CARD" | grep -m1 "Active Profile" | sed 's/.*Active Profile: //'
+}
+
+reconnect() {
+    bluetoothctl disconnect "$ADDR" >/dev/null 2>&1 || true
+    sleep 2
+    local attempt
+    for attempt in 1 2 3 4; do
+        bluetoothctl connect "$ADDR" >/dev/null 2>&1 || true
+        sleep 4
+        if bluetoothctl info "$ADDR" 2>/dev/null | grep -q "LE.Connected: yes"; then
+            return 0
+        fi
+    done
+    return 0
+}
+
+case "${1:-}" in
+    current)
+        case "$(current_profile)" in
+            bap-duplex|bap-sink|bap-source) echo "lc3" ;;
+            a2dp-sink) echo "ldac" ;;
+            a2dp-sink-sbc|a2dp-sink-sbc_xq) echo "sbc" ;;
+            a2dp-sink-aac) echo "aac" ;;
+            a2dp-sink-aptx) echo "aptx" ;;
+            a2dp-sink-aptx_hd) echo "aptx_hd" ;;
+            *) echo "" ;;
+        esac
+        ;;
+    list)
+        echo "Device: FIIO BTR17 ($ADDR)"
+        echo "Current profile: $(current_profile)"
+        echo ""
+        echo "Available codecs:"
+        echo "  lc3      — LE Audio (LC3) — best quality + microphone"
+        echo "  ldac     — A2DP LDAC — highest quality output"
+        echo "  aptx_hd  — A2DP aptX HD"
+        echo "  aptx     — A2DP aptX"
+        echo "  aac      — A2DP AAC"
+        echo "  sbc      — A2DP SBC (fallback)"
+        echo "  auto     — automatic (all codecs)"
+        ;;
+    set)
+        codec="${2:-}"
+        if [[ -z "$codec" ]]; then
+            echo "Usage: bt-codec set <lc3|ldac|aptx_hd|aptx|aac|sbc|auto>"
+            exit 1
+        fi
+        if [[ "$codec" == "auto" ]]; then
+            node=$(find_device_node)
+            pw-cli set-param "$node" Props '{ "bluez5.codecs": ["sbc","sbc_xq","aac","aptx","aptx_hd","ldac"] }' >/dev/null 2>&1
+            echo "Codec set to auto. Reconnecting..."
+            reconnect
+            echo "Done. Profile: $(current_profile)"
+            exit 0
+        fi
+        if [[ "$codec" == "lc3" ]]; then
+            echo "Switching to LE Audio (LC3)..."
+            for attempt in 1 2 3; do
+                if pactl list cards 2>/dev/null | grep -q "bap-duplex.*available: yes"; then
+                    pactl set-card-profile "$CARD" bap-duplex >/dev/null 2>&1 && break
+                fi
+                echo "  bringing up the LE link (attempt $attempt)..."
+                reconnect
+            done
+            pactl set-card-profile "$CARD" bap-duplex >/dev/null 2>&1 || true
+            echo "Done. Profile: $(current_profile)"
+            exit 0
+        fi
+        if [[ -z "${CODEC_MAP[$codec]:-}" ]]; then
+            echo "Unknown codec: $codec"
+            echo "Available: lc3 ldac aptx_hd aptx aac sbc auto"
+            exit 1
+        fi
+        node=$(find_device_node)
+        echo "Switching to $codec..."
+        pw-cli set-param "$node" Props "{ \"bluez5.codecs\": [\"${CODEC_MAP[$codec]}\"] }" >/dev/null 2>&1
+        reconnect
+        pactl set-card-profile "$CARD" a2dp-sink >/dev/null 2>&1 || true
+        echo "Done. Profile: $(current_profile)"
+        ;;
+    *)
+        echo "Usage: bt-codec <list|set <codec>>"
+        echo "  list              Show available codecs"
+        echo "  set <codec>       Switch codec (lc3|ldac|aptx_hd|aptx|aac|sbc|auto)"
+        ;;
+esac
