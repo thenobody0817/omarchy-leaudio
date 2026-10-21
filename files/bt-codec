@@ -6,12 +6,18 @@
 #   bt-codec set <codec>       Switch to a codec (lc3, ldac, aptx_hd, aptx, aac, sbc)
 #   bt-codec auto              Return to automatic (all codecs)
 #
+# The headset address is read from $BT_CODEC_ADDR (e.g. export BT_CODEC_ADDR=AA:BB:CC:DD:EE:FF).
+#
 # LC3  = LE Audio (bap-duplex profile, best quality + microphone)
 # Others = A2DP (high-quality output, no microphone)
 set -euo pipefail
 
-ADDR="40:ED:98:1D:29:3B"
-CARD="bluez_card.40_ED_98_1D_29_3B"
+ADDR="${BT_CODEC_ADDR:-}"
+if [[ -z "$ADDR" ]]; then
+	echo "Set BT_CODEC_ADDR to the Bluetooth address of the headset, e.g. AA:BB:CC:DD:EE:FF" >&2
+	exit 2
+fi
+CARD="bluez_card.${ADDR//:/_}"
 
 # A2DP codec name -> bluez5.codecs entry
 declare -A CODEC_MAP=(
