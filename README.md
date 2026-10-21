@@ -36,6 +36,13 @@ bash restore.sh
 
 ## CLI usage
 
+The headset address comes from the environment, so no personal device
+identifier is baked into the script:
+
+```bash
+export BT_CODEC_ADDR=AA:BB:CC:DD:EE:FF   # the FiiO BTR17
+```
+
 ```bash
 bt-codec list        # show codecs + current profile
 bt-codec current     # print the active codec id (lc3|ldac|aptx_hd|aptx|aac|sbc)
